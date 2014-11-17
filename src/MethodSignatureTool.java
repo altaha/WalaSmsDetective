@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.regex.*;
 
 public class MethodSignatureTool {
-    private final String _androidLib = "/home/michelle/android-sdk-linux/platforms/android-4.3/android.jar";
+    private final String _androidLib = "C:/Users/Ahmed/AppData/Local/Android/android-sdk/platforms/android-18/android.jar";
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {

@@ -6,7 +6,6 @@ import com.ibm.wala.ipa.callgraph.impl.*;
 import com.ibm.wala.ipa.callgraph.propagation.*;
 import com.ibm.wala.ipa.callgraph.propagation.cfa.*;
 import com.ibm.wala.ssa.*;
-
 import com.ibm.wala.util.config.AnalysisScopeReader;
 
 import java.util.*;
@@ -16,17 +15,41 @@ import java.io.File;
 
 public class SampleAnalysis {
 	private final String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
-    //private final String androidJarPath = "/home/michelle/android-sdk-linux/platforms/android-4.3/android.jar";
 	private final String androidJarPath = "C:/Users/Ahmed/AppData/Local/Android/android-sdk/platforms/android-18/android.jar";
-    private final String[] activityLifecycleMethods = {
-        "onCreate(Landroid/os/Bundle;)V",
-        "onStart()V",
-        "onResume()V",
-        "onPause()V",
-        "onStop()V",
-        "onRestart()V",
-        "onDestroy()V"
-    };
+
+	private final String[] activityLifecycleMethods = {
+		"onCreate(Landroid/os/Bundle;)V",
+		"onStart()V",
+		"onResume()V",
+		"onPause()V",
+		"onStop()V",
+		"onRestart()V",
+		"onDestroy()V",
+		"onItemClick(Landroid/widget/AdapterView;Landroid/view/View;IJ)V",
+	};
+	private final String[] activityTypeName = {"Landroid/app/Activity"};
+
+	private final String[] bcastRecvLifecycleMethods = {
+		"onReceive(Landroid/content/Context;Landroid/content/Intent;)V",
+	};
+	private final String[] bcastRecvTypeName = {"Landroid/content/BroadcastReceiver"};
+	
+	private final String[] serviceLifecycleMethods = {
+		"onCreate()V",
+		"onDestroy()V",
+		"onBind(Landroid/content/Intent;)V",
+		"onStart(Landroid/content/Intent;I)V",
+	};
+	private final String[] serviceTypeName = {"Landroid/app/Service"};
+
+	private static final int Activity_Analysis = 0x1;
+	private static final int BcastRecv_Analysis = 0x2;
+	private static final int Service_Analysis = 0x4;
+	private static final int All_Analysis = 0x1000;
+	
+	private static final int Send_Threat = 1;
+	private static final int Recv_Threat = 2;
+	private static final int All_Threats = 3;
 
     public static void main(String[] args) {
         SampleAnalysis analysis = new SampleAnalysis();
@@ -34,8 +57,43 @@ public class SampleAnalysis {
     }
 
     public void run(String[] args) {
-        try {
-            AnalysisScope scope = getAnalysisScope();
+		try {
+			String app_path = appPath;
+            if (args.length > 0)
+				app_path = args[0];
+            System.out.println("Analysing App_Path: " + app_path);
+            
+            int component_type = All_Analysis;
+            if (args.length > 1)
+				component_type = Integer.parseInt(args[1]);
+            System.out.println("Analysing Component Type: " + component_type);
+            
+            int threat_type = All_Threats;
+            if (args.length > 2)
+            	threat_type = Integer.parseInt(args[2]);
+            System.out.println("Detecting Threat Type: " + threat_type);
+            
+            String[] LifecycleMethods;
+            String[] AnalysisTypeNames;
+            if (component_type == Activity_Analysis) {
+            	LifecycleMethods = activityLifecycleMethods;
+            	AnalysisTypeNames = activityTypeName;
+            } else if (component_type == BcastRecv_Analysis) {
+            	LifecycleMethods = bcastRecvLifecycleMethods;
+            	AnalysisTypeNames = bcastRecvTypeName;
+            } else if (component_type == Service_Analysis) {
+            	LifecycleMethods = serviceLifecycleMethods;
+            	AnalysisTypeNames = serviceTypeName;
+            	
+            } else { // COmbine all types
+            	LifecycleMethods = concatStrings(activityLifecycleMethods, bcastRecvLifecycleMethods);
+            	LifecycleMethods = concatStrings(LifecycleMethods, serviceLifecycleMethods);
+            	
+            	AnalysisTypeNames = concatStrings(activityTypeName, bcastRecvTypeName);            	
+            	AnalysisTypeNames = concatStrings(AnalysisTypeNames, serviceTypeName);
+            }
+
+            AnalysisScope scope = getAnalysisScope(app_path);
             IClassHierarchy cha = ClassHierarchy.make(scope);
 
             System.out.println("Class Hierarchy");
@@ -45,20 +103,27 @@ public class SampleAnalysis {
 
             System.out.println("Lifecycle Methods");
             System.out.println("-----------------");
-            printLifecycleMethods(cha);
+            List<Entrypoint> appEntrypoints = printLifecycleMethods(cha, AnalysisTypeNames, LifecycleMethods);
             System.out.println("======================");
 
-            List<Entrypoint> appEntrypoints = getAppEntrypoints(cha);
+            // Create Call Graph builder
             CallGraph cg = makeZeroCFACallgraph(appEntrypoints, scope, cha);
             
             System.out.println("Call Graph");
             System.out.println("----------");
-            printCallGraph(cg, cg.getFakeRootNode(), 0);
+            //FIXME
+            //printCallGraph(cg, cg.getFakeRootNode(), 0);
             System.out.println("======================");
 
             System.out.println("Malicious Behaviours");
-            System.out.println("--------------------");
-            printMaliciousBehaviours(cg);
+            if ((threat_type & Send_Threat) > 0) {
+            	System.out.println("-----SMS SEND-------");
+            	printMaliciousBehavioursSend(cg);
+            }
+            if ((threat_type & Recv_Threat) > 0) {
+            	System.out.println("-----SMS RECV-------");
+            	printMaliciousBehavioursRecv(cg, cg.getFakeRootNode());
+            }
 
 
         } catch (Exception e) {
@@ -67,8 +132,8 @@ public class SampleAnalysis {
         }
     }
 
-    private AnalysisScope getAnalysisScope() throws Exception {
-        AnalysisScope scope = AnalysisScopeReader.makeJavaBinaryAnalysisScope(appPath, null);
+    private AnalysisScope getAnalysisScope(String app_path) throws Exception {
+        AnalysisScope scope = AnalysisScopeReader.makeJavaBinaryAnalysisScope(app_path, null);
         
         Module androidModule = new JarFileModule(new JarFile(androidJarPath));
         scope.addToScope(ClassLoaderReference.Extension, androidModule);
@@ -95,28 +160,38 @@ public class SampleAnalysis {
         }
     }
 
-    private void printLifecycleMethods(IClassHierarchy cha) {
-        IClass activityClass = cha.lookupClass(TypeReference.findOrCreate(ClassLoaderReference.Extension, "Landroid/app/Activity"));
+    private List<Entrypoint> printLifecycleMethods(IClassHierarchy cha, String[] typeNames, String[] lifecycleMethods) {
+        List<Entrypoint> entrypoints = new ArrayList<Entrypoint>();
 
-        for (IClass activitySubclass : cha.computeSubClasses(activityClass.getReference())) {
-            if (!activitySubclass.getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
-                continue;
-            }
+        for (String typeName : typeNames) {
+        	
+        	System.out.println("=== Finding EntryPoints for " + typeName + " class ===");
 
-            System.out.println("Activity class: " + activitySubclass.getName().toString());
-
-            Collection<IMethod> declaredMethods = activitySubclass.getDeclaredMethods();
-            //for (IMethod declaredMethod : declaredMethods) {
-            //    System.out.println("    Declared: " + declaredMethod.getSignature());
-            //}
-
-            for (String lifecycle : activityLifecycleMethods) {
-                IMethod lifecycleMethod = cha.resolveMethod(activitySubclass, Selector.make(lifecycle));
-                if (declaredMethods.contains(lifecycleMethod)) {
-                    System.out.println("    Lifecycle method: " + lifecycleMethod.getSignature());
-                }
-            }
+	        IClass activityClass = cha.lookupClass(TypeReference.findOrCreate(ClassLoaderReference.Extension, typeName));
+	
+	        for (IClass activitySubclass : cha.computeSubClasses(activityClass.getReference())) {
+	            if (!activitySubclass.getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
+	                continue;
+	            }
+	
+	            System.out.println(typeName + " class: " + activitySubclass.getName().toString());
+	
+	            Collection<IMethod> declaredMethods = activitySubclass.getDeclaredMethods();
+	            //for (IMethod declaredMethod : declaredMethods) {
+	            //    System.out.println("    Declared: " + declaredMethod.getSignature());
+	            //}
+	
+	            for (String lifecycle : lifecycleMethods) {
+	                IMethod lifecycleMethod = cha.resolveMethod(activitySubclass, Selector.make(lifecycle));
+	                if (declaredMethods.contains(lifecycleMethod)) {
+	                    System.out.println("    Lifecycle method: " + lifecycleMethod.getSignature());
+	                    entrypoints.add(new DefaultEntrypoint(lifecycleMethod, cha));
+	                }
+	            }
+	        }
         }
+
+        return entrypoints;
     }
 
     private void printCallGraph(CallGraph cg, CGNode currentNode, int level) {
@@ -148,7 +223,7 @@ public class SampleAnalysis {
         }
     }
 
-    private void printMaliciousBehaviours(CallGraph cg) {
+    private void printMaliciousBehavioursSend(CallGraph cg) {
         IClassHierarchy cha = cg.getClassHierarchy();
         String sendTextMessageSignature = "android.telephony.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
 
@@ -186,30 +261,48 @@ public class SampleAnalysis {
         }
     }
 
-    private List<Entrypoint> getAppEntrypoints(IClassHierarchy cha) {
-        List<Entrypoint> entrypoints = new ArrayList<Entrypoint>();
+    private void printMaliciousBehavioursRecv(CallGraph cg, CGNode currentNode) {
+        String recvTextMessageSignature1 = "android.telephony.gsm.SmsMessage.createFromPdu([B)Landroid/telephony/gsm/SmsMessage;";
+        String recvTextMessageSignature2 = "android.telephony.SmsMessage.createFromPdu([B)Landroid/telephony/SmsMessage;";
+        String abortBroadcastSignature = "android.content.BroadcastReceiver.abortBroadcast()V";
 
-        // For now, just get lifecycle handlers
-        IClass activityClass = cha.lookupClass(TypeReference.findOrCreate(ClassLoaderReference.Extension, "Landroid/app/Activity"));
+        IClassHierarchy cha = cg.getClassHierarchy();
+        Iterator<CallSiteReference> callsiteIter = currentNode.iterateCallSites();
+        
+        Boolean foundRecv = false;
+        Boolean foundAbort = false;
 
-        for (IClass activitySubclass : cha.computeSubClasses(activityClass.getReference())) {
-            if (!activitySubclass.getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
-                continue;
-            }
+        while (callsiteIter.hasNext()) {
+            CallSiteReference callsite = callsiteIter.next();
+            IMethod calledMethod = cha.resolveMethod(callsite.getDeclaredTarget());
 
-            Collection<IMethod> declaredMethods = activitySubclass.getDeclaredMethods();
-
-            for (String lifecycle : activityLifecycleMethods) {
-                IMethod lifecycleMethod = cha.resolveMethod(activitySubclass, Selector.make(lifecycle));
-
-                if (declaredMethods.contains(lifecycleMethod)) {
-                    entrypoints.add(new DefaultEntrypoint(lifecycleMethod, cha));
+            if (cg.getPossibleTargets(currentNode, callsite).isEmpty()) {
+            	//TODO: What does below statement do?
+                //System.out.println("    " + callsite.getDeclaredTarget().getSignature());
+            } else {
+                for (CGNode targetNode : cg.getPossibleTargets(currentNode, callsite)) {
+                    if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
+                    	printMaliciousBehavioursRecv(cg, targetNode);
+                    } else {
+                        if (targetNode.getMethod().getSignature().equals(recvTextMessageSignature1)
+                        	|| targetNode.getMethod().getSignature().equals(recvTextMessageSignature2)) {
+                            System.out.println("Yayyy Found an SMS Receive");;
+                            foundRecv = true;
+                            if (foundAbort)
+                        		System.out.println("Detected Recv Malware (1)");
+                        }
+                        else if (targetNode.getMethod().getSignature().equals(abortBroadcastSignature)) {
+                        	System.out.println("Yayyy Found a Broadcast abort");
+                        	foundAbort = true;
+                        	if (foundRecv)
+                        		System.out.println("Detected Recv Malware (2)");
+                        }
+                    }
                 }
             }
         }
-
-        return entrypoints;
     }
+
 
     private CallGraph makeZeroCFACallgraph(Iterable<Entrypoint> entrypoints, AnalysisScope scope, IClassHierarchy cha) {
         try {
@@ -227,5 +320,14 @@ public class SampleAnalysis {
             return null;
         }
     }
+    
+    public static String[] concatStrings(String[] A, String[] B) {
+ 	   int aLen = A.length;
+ 	   int bLen = B.length;
+ 	   String[] C= new String[aLen+bLen];
+ 	   System.arraycopy(A, 0, C, 0, aLen);
+ 	   System.arraycopy(B, 0, C, aLen, bLen);
+ 	   return C;
+ 	}
 }
 
