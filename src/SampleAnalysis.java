@@ -50,13 +50,18 @@ public class SampleAnalysis {
 	private static final int Send_Threat = 1;
 	private static final int Recv_Threat = 2;
 	private static final int All_Threats = 3;
+	
+	private Set<String> cgset;
 
     public static void main(String[] args) {
         SampleAnalysis analysis = new SampleAnalysis();
-        analysis.run(args);
+        int ret = analysis.run(args);
+        System.exit(ret);
     }
 
-    public void run(String[] args) {
+    public int run(String[] args) {
+    	int ret = 0;
+    	
 		try {
 			String app_path = appPath;
             if (args.length > 0)
@@ -111,25 +116,25 @@ public class SampleAnalysis {
             
             System.out.println("Call Graph");
             System.out.println("----------");
-            //FIXME
             //printCallGraph(cg, cg.getFakeRootNode(), 0);
             System.out.println("======================");
 
             System.out.println("Malicious Behaviours");
             if ((threat_type & Send_Threat) > 0) {
             	System.out.println("-----SMS SEND-------");
-            	printMaliciousBehavioursSend(cg);
+            	ret |= printMaliciousBehavioursSend(cg);
             }
             if ((threat_type & Recv_Threat) > 0) {
             	System.out.println("-----SMS RECV-------");
-            	printMaliciousBehavioursRecv(cg, cg.getFakeRootNode());
+            	this.cgset = new HashSet<String>(); //reset the set of iterated nodes
+            	ret |= printMaliciousBehavioursRecv(cg, cg.getFakeRootNode());
             }
-
 
         } catch (Exception e) {
             System.out.println("Exception: " + e);
             e.printStackTrace();
         }
+        return ret;
     }
 
     private AnalysisScope getAnalysisScope(String app_path) throws Exception {
@@ -199,8 +204,13 @@ public class SampleAnalysis {
         for (int i = 0; i < level; i++) {
             indent += "    ";
         }
+        if (level == 0)
+        	this.cgset = new HashSet<String>();
         
-        System.out.println(indent + currentNode.getMethod().getSignature());
+        String methodSig = currentNode.getMethod().getSignature();
+        System.out.println(indent + methodSig);
+        
+        this.cgset.add(methodSig);
 
         IClassHierarchy cha = cg.getClassHierarchy();
         Iterator<CallSiteReference> callsiteIter = currentNode.iterateCallSites();
@@ -210,20 +220,24 @@ public class SampleAnalysis {
             IMethod calledMethod = cha.resolveMethod(callsite.getDeclaredTarget());
 
             if (cg.getPossibleTargets(currentNode, callsite).isEmpty()) {
-                System.out.println(indent + "    " + callsite.getDeclaredTarget().getSignature());
+            	methodSig = callsite.getDeclaredTarget().getSignature();
+                System.out.println(indent + "    " + methodSig);
             } else {
                 for (CGNode targetNode : cg.getPossibleTargets(currentNode, callsite)) {
-                    if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
+                	methodSig = targetNode.getMethod().getSignature();
+                    if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application) &&
+                    		!this.cgset.contains(methodSig)) {
                         printCallGraph(cg, targetNode, level + 1);
                     } else {
-                        System.out.println(indent + "    " + targetNode.getMethod().getSignature());
+                        System.out.println(indent + "    " + methodSig);
                     }
                 }
             }
         }
     }
 
-    private void printMaliciousBehavioursSend(CallGraph cg) {
+    private int printMaliciousBehavioursSend(CallGraph cg) {
+    	int ret = 0;
         IClassHierarchy cha = cg.getClassHierarchy();
         String sendTextMessageSignature = "android.telephony.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
 
@@ -244,6 +258,7 @@ public class SampleAnalysis {
 
                     if (callerSymbols.isStringConstant(invokeInstr.getUse(1))) {
                         System.out.println("Possible premium SMS to: " + callerSymbols.getStringValue(invokeInstr.getUse(1)));
+                        ret = Send_Threat;
                         
                         if (callerSymbols.isStringConstant(invokeInstr.getUse(3))) {
                             System.out.println("    text: " + callerSymbols.getStringValue(invokeInstr.getUse(3)));
@@ -259,12 +274,17 @@ public class SampleAnalysis {
                 }
             }
         }
+        return ret;
     }
 
-    private void printMaliciousBehavioursRecv(CallGraph cg, CGNode currentNode) {
+    private int printMaliciousBehavioursRecv(CallGraph cg, CGNode currentNode) {
+    	int ret = 0;
         String recvTextMessageSignature1 = "android.telephony.gsm.SmsMessage.createFromPdu([B)Landroid/telephony/gsm/SmsMessage;";
         String recvTextMessageSignature2 = "android.telephony.SmsMessage.createFromPdu([B)Landroid/telephony/SmsMessage;";
         String abortBroadcastSignature = "android.content.BroadcastReceiver.abortBroadcast()V";
+        
+        String methodSig = currentNode.getMethod().getSignature();
+        this.cgset.add(methodSig);
 
         IClassHierarchy cha = cg.getClassHierarchy();
         Iterator<CallSiteReference> callsiteIter = currentNode.iterateCallSites();
@@ -281,26 +301,35 @@ public class SampleAnalysis {
                 //System.out.println("    " + callsite.getDeclaredTarget().getSignature());
             } else {
                 for (CGNode targetNode : cg.getPossibleTargets(currentNode, callsite)) {
-                    if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application)) {
-                    	printMaliciousBehavioursRecv(cg, targetNode);
+                	
+                	methodSig = targetNode.getMethod().getSignature();
+                	
+                    if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application)
+                    		&& !this.cgset.contains(methodSig)) {
+                    	ret = printMaliciousBehavioursRecv(cg, targetNode);
                     } else {
-                        if (targetNode.getMethod().getSignature().equals(recvTextMessageSignature1)
-                        	|| targetNode.getMethod().getSignature().equals(recvTextMessageSignature2)) {
+                        if (methodSig.equals(recvTextMessageSignature1)
+                        	|| methodSig.equals(recvTextMessageSignature2)) {
                             System.out.println("Yayyy Found an SMS Receive");;
                             foundRecv = true;
-                            if (foundAbort)
+                            if (foundAbort) {
                         		System.out.println("Detected Recv Malware (1)");
+                        		ret = Recv_Threat;
+                            }
                         }
-                        else if (targetNode.getMethod().getSignature().equals(abortBroadcastSignature)) {
+                        else if (methodSig.equals(abortBroadcastSignature)) {
                         	System.out.println("Yayyy Found a Broadcast abort");
                         	foundAbort = true;
-                        	if (foundRecv)
+                        	if (foundRecv) {
                         		System.out.println("Detected Recv Malware (2)");
+                        		ret = Recv_Threat;
+                        	}
                         }
                     }
                 }
             }
         }
+        return ret;
     }
 
 

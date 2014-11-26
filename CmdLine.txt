@@ -4,8 +4,8 @@ java -classpath "C:\Users\Ahmed\workspace\wala_exercises\wala\com.ibm.wala.cast.
 
 args:
 First: app_path
-Second: Component type, 1=Activity, 2= BroadcastReceiver, 3=Service, else=all
-Third: Thread type, 1=Send SMS, 2=Receive SMS, 3 = Send and Receive
+Second: Component type, 1=Activity, 2= BroadcastReceiver, 4=Service, else=all
+Third: Threat type, 1=Send SMS, 2=Receive SMS, 3 = Send and Receive
 
 
 
