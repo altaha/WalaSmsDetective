@@ -14,7 +14,10 @@ import java.io.File;
 
 
 public class SampleAnalysis {
-	private final String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
+	//private final String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
+	//private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/Gone60/Gone60Bin/com";
+	//private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/HippoSMS/HippoSMSBin/com";
+	private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/Zsone/ZsoneBin/com/mj/iAnime";
 	private final String androidJarPath = "C:/Users/Ahmed/AppData/Local/Android/android-sdk/platforms/android-18/android.jar";
 
 	private final String[] activityLifecycleMethods = {
@@ -50,6 +53,10 @@ public class SampleAnalysis {
 	private static final int Send_Threat = 1;
 	private static final int Recv_Threat = 2;
 	private static final int All_Threats = 3;
+	
+	private static final int findEntryPointsMode = 1;
+    private Set<String> discoveredMethods;
+    private Dictionary<String, IMethod> discoveredIMethodsDict;
 	
 	private Set<String> cgset;
 
@@ -108,7 +115,27 @@ public class SampleAnalysis {
 
             System.out.println("Lifecycle Methods");
             System.out.println("-----------------");
-            List<Entrypoint> appEntrypoints = printLifecycleMethods(cha, AnalysisTypeNames, LifecycleMethods);
+            
+            List<Entrypoint> appEntrypoints;
+
+            if (findEntryPointsMode == 0) {
+            	appEntrypoints = printLifecycleMethods(cha, AnalysisTypeNames, LifecycleMethods);
+            } else {
+            	discoveredMethods = new LinkedHashSet<String>();
+            	discoveredIMethodsDict = new Hashtable<String, IMethod>();
+            	
+            	findAllMethods(cha);
+                
+                Set<String> entryPointsSignatures = findEntryPoints(scope, cha);
+                appEntrypoints = new ArrayList<Entrypoint>();
+
+                Iterator<String> entryPointsIter = entryPointsSignatures.iterator();
+                while(entryPointsIter.hasNext()) {
+                	String entry = entryPointsIter.next();
+                	System.out.println("EntryPoint: " + entry);
+                	appEntrypoints.add(new DefaultEntrypoint(this.discoveredIMethodsDict.get(entry), cha));
+                }
+            }
             System.out.println("======================");
 
             // Create Call Graph builder
@@ -116,7 +143,7 @@ public class SampleAnalysis {
             
             System.out.println("Call Graph");
             System.out.println("----------");
-            //printCallGraph(cg, cg.getFakeRootNode(), 0);
+            printCallGraph(cg, cg.getFakeRootNode(), 0);
             System.out.println("======================");
 
             System.out.println("Malicious Behaviours");
@@ -240,6 +267,7 @@ public class SampleAnalysis {
     	int ret = 0;
         IClassHierarchy cha = cg.getClassHierarchy();
         String sendTextMessageSignature = "android.telephony.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
+        String sendTextMessageSignature2 = "android.telephony.gsm.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
 
         Iterator<CGNode> nodeIter = cg.iterator();
 
@@ -251,7 +279,8 @@ public class SampleAnalysis {
             while (callSiteIter.hasNext()) {
                 CallSiteReference callSite = callSiteIter.next();
 
-                if (callSite.getDeclaredTarget().getSignature().equals(sendTextMessageSignature)) {
+                if (callSite.getDeclaredTarget().getSignature().equals(sendTextMessageSignature) ||
+                		callSite.getDeclaredTarget().getSignature().equals(sendTextMessageSignature2)) {
                     IR callerIR = callerNode.getIR();
                     SymbolTable callerSymbols = callerIR.getSymbolTable();
                     SSAInstruction invokeInstr = callerIR.getPEI(new ProgramCounter(callSite.getProgramCounter()));
@@ -358,5 +387,103 @@ public class SampleAnalysis {
  	   System.arraycopy(B, 0, C, aLen, bLen);
  	   return C;
  	}
+    
+    private void findAllMethods(IClassHierarchy cha) throws Exception {
+    	
+    	Iterator<IClass> classIter = cha.iterator();
+
+        while (classIter.hasNext()) {
+            IClass currentClass = classIter.next();
+            
+            if (!currentClass.getClassLoader().getReference().equals(ClassLoaderReference.Application))
+            	continue;
+            
+            System.out.println("Class: " + currentClass.getName().toString());
+
+            for (IMethod currentMethod : currentClass.getDeclaredMethods()) {
+            	System.out.println("    Method   : " + currentMethod.getSelector().toString());
+            	System.out.println("    Signature: " + currentMethod.getSignature());
+            	discoveredMethods.add(currentMethod.getSignature());
+            	discoveredIMethodsDict.put(currentMethod.getSignature(), currentMethod);
+            }
+        }
+        System.out.println("# of Methods found =  " + discoveredMethods.size());
+    }
+    
+    private Set<String> findEntryPoints(AnalysisScope scope, IClassHierarchy cha) throws Exception {
+    	
+    	Set<String> supersetMethods = new LinkedHashSet<String>(this.discoveredMethods);
+    	Set<String> entryPoints = new LinkedHashSet<String>();
+    	
+    	//iterate through all entries in discovered methods. Ad to entryPoints
+    	//	For each create a call graph and traverse.
+    	//	Remove all CG traversed methods from discoveredMethods and entryPoints if they exist there
+    	//	At the end, entryPoints list should only contain methods that were never traversed in any CG
+    	int i = 0;
+    	while(!supersetMethods.isEmpty()) {
+    		String nextmethod = supersetMethods.iterator().next();
+    		supersetMethods.remove(nextmethod);
+    		entryPoints.add(nextmethod);
+    		
+    		++i;
+    		System.out.println("Creating call graph # " + i);
+    		
+    		//create a callgrph with nextmethod as the only entrypoint
+    		List<Entrypoint> entrypoints = new ArrayList<Entrypoint>();
+            entrypoints.add(new DefaultEntrypoint(this.discoveredIMethodsDict.get(nextmethod), cha));
+    		CallGraph cg = makeZeroCFACallgraph2(entrypoints, scope, cha);
+    		
+    		traverseCallGraph(nextmethod, cg, supersetMethods, entryPoints);
+    	}
+    	
+    	return entryPoints;
+    }
+    
+    private CallGraph makeZeroCFACallgraph2(Iterable<Entrypoint> entrypoints, AnalysisScope scope, IClassHierarchy cha) {
+        try {
+            AnalysisOptions options = new AnalysisOptions(scope, entrypoints);
+            options.setSelector(new ClassHierarchyMethodTargetSelector(cha));
+            options.setSelector(new ClassHierarchyClassTargetSelector(cha));
+
+            SSAPropagationCallGraphBuilder builder = ZeroXCFABuilder.make(cha, options, new AnalysisCache(), new DefaultContextSelector(options, cha), null, ZeroXInstanceKeys.NONE);
+
+            CallGraph cg = builder.makeCallGraph(options, null);
+            return cg;
+
+        } catch (Exception e) {
+            System.out.println("Error: " + e.toString());
+            return null;
+        }
+    }
+    
+    private void traverseCallGraph(String cgEntryMethod, CallGraph cg, Set<String> supersetMethods, Set<String> entryPoints) {
+
+    	Iterator<CGNode> nodeIter = cg.iterator();
+    	
+    	while (nodeIter.hasNext()) {
+            CGNode callerNode = nodeIter.next();
+
+        /*    Iterator<CallSiteReference> callSiteIter = callerNode.iterateCallSites();
+
+            while (callSiteIter.hasNext()) {
+                CallSiteReference callSite = callSiteIter.next();
+                
+                String methodSig = callSite.getDeclaredTarget().getSignature();
+                
+                supersetMethods.remove(methodSig);
+                entryPoints.remove(methodSig);
+            }
+        }*/
+            IMethod methodI = callerNode.getMethod();
+            String methodSig = callerNode.getMethod().getSignature();
+            if (methodSig.equals(cgEntryMethod) ||
+            	!methodI.getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application))
+            	continue;
+
+            System.out.println("Traversing: " + methodSig);
+            supersetMethods.remove(methodSig);
+            entryPoints.remove(methodSig);
+        }
+    }
 }
 
