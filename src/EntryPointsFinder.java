@@ -22,25 +22,32 @@ import com.ibm.wala.util.config.AnalysisScopeReader;
 
 import java.util.*;
 import java.util.jar.JarFile;
-import java.util.regex.*;
+import java.io.File;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
 
 public class EntryPointsFinder {
     private final String _androidLib = "C:/Users/Ahmed/AppData/Local/Android/android-sdk/platforms/android-18/android.jar";
-    //private final String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
-	//private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/Gone60/Gone60Bin/com";
-	//private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/HippoSMS/HippoSMSBin/com";
-	private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/Zsone/ZsoneBin/com/mj";
+    private String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
+    private String writeFilePath = "C:/Users/Ahmed/workspace/wala_test/entries.txt";
     
     private Set<String> discoveredMethods;
     private Dictionary<String, IMethod> discoveredIMethodsDict;
 
     public static void main(String[] args) throws Exception {
-    	
-    	EntryPointsFinder finder = new EntryPointsFinder();
+
+    	EntryPointsFinder finder = new EntryPointsFinder(args);
     	finder.run();
     }
 
-    public EntryPointsFinder() {
+    public EntryPointsFinder(String[] args) {
+    	if (args.length > 0)
+    		appPath = args[0];
+    	System.out.println("Analysing apppath: " + appPath);
+    	
+    	if (args.length > 1)
+    		writeFilePath = args[1];
+    	System.out.println("writing entry points to: " + writeFilePath);
     }
 
     public void run() throws Exception {
@@ -61,11 +68,16 @@ public class EntryPointsFinder {
         
         System.out.println("======= EntryPoint Signatures ======");
         Iterator<String> entryPointsIter = entryPointsSignatures.iterator();
+        BufferedWriter bw = new BufferedWriter(new FileWriter(new File(writeFilePath), true));
         while(entryPointsIter.hasNext()) {
         	String entry = entryPointsIter.next();
         	System.out.println(entry);
         	entrypoints.add(new DefaultEntrypoint(this.discoveredIMethodsDict.get(entry), cha));
+        	
+        	bw.write(entry);
+        	bw.newLine();
         }
+        bw.close();
         
     }
     
