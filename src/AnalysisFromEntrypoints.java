@@ -201,21 +201,21 @@ public class AnalysisFromEntrypoints {
         }
         return ret;
     }
+    
+    private Boolean foundRecv;
+    private Boolean foundAbort;
 
     private int printMaliciousBehavioursRecv(CallGraph cg, CGNode currentNode) {
     	int ret = 0;
-        String recvTextMessageSignature1 = "android.telephony.gsm.SmsMessage.createFromPdu([B)Landroid/telephony/gsm/SmsMessage;";
-        String recvTextMessageSignature2 = "android.telephony.SmsMessage.createFromPdu([B)Landroid/telephony/SmsMessage;";
-        String abortBroadcastSignature = "android.content.BroadcastReceiver.abortBroadcast()V";
+    	
+    	foundRecv = false;
+        foundAbort = false;
         
         String methodSig = currentNode.getMethod().getSignature();
         this.cgset.add(methodSig);
 
         IClassHierarchy cha = cg.getClassHierarchy();
         Iterator<CallSiteReference> callsiteIter = currentNode.iterateCallSites();
-        
-        Boolean foundRecv = false;
-        Boolean foundAbort = false;
 
         while (callsiteIter.hasNext()) {
             CallSiteReference callsite = callsiteIter.next();
@@ -224,6 +224,9 @@ public class AnalysisFromEntrypoints {
             if (cg.getPossibleTargets(currentNode, callsite).isEmpty()) {
             	//TODO:
                 //System.out.println("    " + callsite.getDeclaredTarget().getSignature());
+            	methodSig = callsite.getDeclaredTarget().getSignature();
+            	ret |= receiveMalwareDetectionChecks(methodSig);
+            	
             } else {
                 for (CGNode targetNode : cg.getPossibleTargets(currentNode, callsite)) {
                 	
@@ -231,32 +234,52 @@ public class AnalysisFromEntrypoints {
                 	
                     if (targetNode.getMethod().getDeclaringClass().getClassLoader().getReference().equals(ClassLoaderReference.Application)
                     		&& !this.cgset.contains(methodSig)) {
-                    	ret = printMaliciousBehavioursRecv(cg, targetNode);
+                    	ret |= printMaliciousBehavioursRecv(cg, targetNode);
                     } else {
-                        if (methodSig.equals(recvTextMessageSignature1)
-                        	|| methodSig.equals(recvTextMessageSignature2)) {
-                            System.out.println("Yayyy Found an SMS Receive");;
-                            foundRecv = true;
-                            if (foundAbort) {
-                        		System.out.println("Detected Recv Malware (1)");
-                        		ret = Recv_Threat;
-                            }
-                        }
-                        else if (methodSig.equals(abortBroadcastSignature)) {
-                        	System.out.println("Yayyy Found a Broadcast abort");
-                        	foundAbort = true;
-                        	if (foundRecv) {
-                        		System.out.println("Detected Recv Malware (2)");
-                        		ret = Recv_Threat;
-                        	}
-                        }
+                    	ret |= receiveMalwareDetectionChecks(methodSig);
                     }
                 }
             }
         }
         return ret;
     }
-
+    
+    private int receiveMalwareDetectionChecks(String methodSig) {
+    	int ret = 0;
+    	
+        String recvTextMessageSignature1 = "android.telephony.gsm.SmsMessage.createFromPdu([B)Landroid/telephony/gsm/SmsMessage;";
+        String recvTextMessageSignature2 = "android.telephony.SmsMessage.createFromPdu([B)Landroid/telephony/SmsMessage;";
+        String sendTextMessageSignature = "android.telephony.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
+        String sendTextMessageSignature2 = "android.telephony.gsm.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
+        String abortBroadcastSignature = "android.content.BroadcastReceiver.abortBroadcast()V";
+    	
+    	if (methodSig.equals(recvTextMessageSignature1)
+        	|| methodSig.equals(recvTextMessageSignature2)) {
+            System.out.println("Yayyy Found an SMS Receive");;
+            foundRecv = true;
+            if (foundAbort) {
+        		System.out.println("Detected Recv Malware (1)");
+        		ret = Recv_Threat;
+            }
+        }
+        else if (methodSig.equals(abortBroadcastSignature)) {
+        	System.out.println("Yayyy Found a Broadcast abort");
+        	foundAbort = true;
+        	if (foundRecv) {
+        		System.out.println("Detected Recv Malware (2)");
+        		ret = Recv_Threat;
+        	}
+        }
+        else if (methodSig.equals(sendTextMessageSignature) ||
+        		methodSig.equals(sendTextMessageSignature2)) {
+        	System.out.println("Yayyy Found a Send Message");
+        	if (foundRecv) {
+        		System.out.println("Detected Recv Malware (3)");
+        		ret = Recv_Threat;
+        	}
+        }
+    	return ret;
+    }
 
     private CallGraph makeZeroCFACallgraph(Iterable<Entrypoint> entrypoints, AnalysisScope scope, IClassHierarchy cha) {
         try {
