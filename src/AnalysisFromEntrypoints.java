@@ -7,6 +7,13 @@ import com.ibm.wala.ipa.callgraph.propagation.*;
 import com.ibm.wala.ipa.callgraph.propagation.cfa.*;
 import com.ibm.wala.ssa.*;
 import com.ibm.wala.util.config.AnalysisScopeReader;
+import com.ibm.wala.ipa.slicer.Statement;
+import com.ibm.wala.ipa.slicer.Slicer;
+import com.ibm.wala.ipa.slicer.Slicer.DataDependenceOptions;
+import com.ibm.wala.ipa.slicer.Slicer.ControlDependenceOptions;
+//import com.ibm.wala.util.strings.Atom;
+//import com.ibm.wala.util.debug.Assertions;
+
 
 import java.util.*;
 import java.util.jar.JarFile;
@@ -17,9 +24,9 @@ import java.io.BufferedReader;
 
 
 public class AnalysisFromEntrypoints {
-	private final String appPath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes";
+	private final String appPath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/HippoSMS/HippoSMSBin/com";
 	private final String androidJarPath = "C:/Users/Ahmed/AppData/Local/Android/android-sdk/platforms/android-18/android.jar";
-	private final String entrypoints_FilePath = "C:/Users/Ahmed/workspace/wala_exercises/SampleApp/bin/classes/entries.txt";
+	private final String entrypoints_FilePath = "C:/Users/Ahmed/Desktop/Study_Stuff/MEng/ECE1776_Security/MalwareSamples/HippoSMS/entries.txt";
 	
 	private static final int Send_Threat = 1;
 	private static final int Recv_Threat = 2;
@@ -70,17 +77,25 @@ public class AnalysisFromEntrypoints {
             System.out.println("======================");
 
             // Create Call Graph builder
-            CallGraph cg = makeZeroCFACallgraph(appEntrypoints, scope, cha);
-            
             System.out.println("Call Graph");
             System.out.println("----------");
+            AnalysisOptions options = new AnalysisOptions(scope, appEntrypoints);
+            options.setSelector(new ClassHierarchyMethodTargetSelector(cha));
+            options.setSelector(new ClassHierarchyClassTargetSelector(cha));
+
+            SSAPropagationCallGraphBuilder builder = ZeroXCFABuilder.make(cha, options, new AnalysisCache(), new DefaultContextSelector(options, cha), null, ZeroXInstanceKeys.NONE);
+
+            CallGraph cg = builder.makeCallGraph(options, null);
+            PointerAnalysis pa = builder.getPointerAnalysis();
+
+
             printCallGraph(cg, cg.getFakeRootNode(), 0);
             System.out.println("======================");
 
             System.out.println("Malicious Behaviours");
             if ((threat_type & Send_Threat) > 0) {
             	System.out.println("-----SMS SEND-------");
-            	ret |= printMaliciousBehavioursSend(cg);
+            	ret |= printMaliciousBehavioursSend(cg, pa);
             }
             if ((threat_type & Recv_Threat) > 0) {
             	System.out.println("-----SMS RECV-------");
@@ -160,7 +175,7 @@ public class AnalysisFromEntrypoints {
         }
     }
 
-    private int printMaliciousBehavioursSend(CallGraph cg) {
+    private int printMaliciousBehavioursSend(CallGraph cg, PointerAnalysis pa) throws Exception {
     	int ret = 0;
         String sendTextMessageSignature = "android.telephony.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
         String sendTextMessageSignature2 = "android.telephony.gsm.SmsManager.sendTextMessage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/app/PendingIntent;Landroid/app/PendingIntent;)V";
@@ -194,6 +209,18 @@ public class AnalysisFromEntrypoints {
                             if (textDefInstr != null) {
                                 System.out.println("    text: " + textDefInstr.toString());
                             }
+                        }
+                    } else {
+                    	System.out.println("Trying Slicer based detection");
+                    	Statement statement = findCallTo(callerNode, "sendTextMessage");
+                    	
+                    	Collection<Statement> slice;
+                        // context-sensitive thin slice
+                        slice = Slicer.computeBackwardSlice(statement, cg, pa, DataDependenceOptions.NO_BASE_PTRS,
+                            ControlDependenceOptions.NONE);
+                        for (Statement s : slice){
+                        	CGNode slicenode = s.getNode();
+                        	System.out.println(s);
                         }
                     }
                 }
@@ -342,6 +369,22 @@ public class AnalysisFromEntrypoints {
     	}
         System.out.println("# of entrypoints read =  " + entrypoints.size());
         return entrypoints;
+    }
+    
+    public static Statement findCallTo(CGNode n, String methodName) {
+        IR ir = n.getIR();
+        for (Iterator<SSAInstruction> it = ir.iterateAllInstructions(); it.hasNext();) {
+          SSAInstruction s = it.next();
+          if (s instanceof com.ibm.wala.ssa.SSAAbstractInvokeInstruction) {
+            com.ibm.wala.ssa.SSAAbstractInvokeInstruction call = (com.ibm.wala.ssa.SSAAbstractInvokeInstruction) s;
+            if (call.getCallSite().getDeclaredTarget().getName().toString().equals(methodName)) {
+              com.ibm.wala.util.intset.IntSet indices = ir.getCallInstructionIndices(call.getCallSite());
+              com.ibm.wala.util.debug.Assertions.productionAssertion(indices.size() == 1, "expected 1 but got " + indices.size());
+              return new com.ibm.wala.ipa.slicer.NormalStatement(n, indices.intIterator().next());
+            }
+          }
+        }
+        return null;
     }
 }
 
